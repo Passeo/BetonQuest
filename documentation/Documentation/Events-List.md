@@ -613,3 +613,16 @@ Gives the specified amount of experience points to the player. You can give whol
     ```YAML
     experience 4 level
     ```
+
+## Drop Item: `drop`
+
+Drop the predefined items. They are specified exactly as in `give` event - list separated by commas,
+every item can have amount separated by colon. Default amount is 1. You can also specify `private` to
+make item invisible to other people this keyword need `ProtocolLib` installed.
+And you can also specify `nodespawn` to make item not despawning after 5 minutes.
+
+!!! example
+  ```YAML
+   drop emerald:5,emerald_block:1 location:100;100;100;world
+   drop emerald:5 location:100;100;100;world private
+  ```
