@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - added AureliumSkillsLevelExperienceEvent
 - add LuckPerms context integration for tags
   - All existing users must add luckperms: 'true' to their config.yml's hook section.
+- add drop item events
+  - added private keywords
+  - added nodespawn keywords
 ### Changed
 - math variable now allows rounding output with the ~ operator
 - changed package names from `pl.betoncraft.betonquest` to `org.betonquest.betonquest`
