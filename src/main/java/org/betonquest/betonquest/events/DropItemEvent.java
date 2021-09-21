@@ -24,21 +24,22 @@ import org.bukkit.event.entity.ItemMergeEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.inventory.ItemStack;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 @SuppressWarnings({"PMD.CommentRequired"})
 public class DropItemEvent extends QuestEvent implements Listener {
 
     private final Instruction.Item[] questItems;
     private final CompoundLocation location;
+    private final boolean isProtected;
     private final boolean isPrivate;
-    private final boolean isIndestructible;
 
-    private final ConcurrentHashMap<Entity, UUID> entityPlayerMap = new ConcurrentHashMap<>();
-    private final List<Entity> indestructibleItem = new ArrayList<>();
+    /**
+     * Saves the entity of each dropped item alongside the player that is allowed to pick the item up.
+     */
+    private final Map<Entity, UUID> entityPlayerMap = new HashMap<>();
     private EntityHider hider;
 
     public DropItemEvent(final Instruction instruction) throws InstructionParseException {
@@ -47,15 +48,25 @@ public class DropItemEvent extends QuestEvent implements Listener {
         Bukkit.getPluginManager().registerEvents(this, BetonQuest.getInstance());
 
         questItems = instruction.getItemList();
-        location = instruction.getLocation("location");
-        isPrivate = instruction.hasArgument("isPrivate");
-        isIndestructible = instruction.hasArgument("nodespawn");
 
-        if (isPrivate) {
+        final String location = instruction.getOptional("location");
+        if (location == null) {
+            throw new InstructionParseException("No drop location given!");
+        } else {
+            this.location = instruction.getLocation(location);
+        }
+
+        final String isProtected = instruction.getOptional("protected");
+        this.isProtected = isProtected != null && isProtected.equals("true");
+
+        final String isPrivate = instruction.getOptional("private");
+        this.isPrivate = isPrivate != null && isPrivate.equals("true");
+
+        if (this.isPrivate) {
             if (Bukkit.getPluginManager().getPlugin("ProtocolLib") == null) {
                 throw new InstructionParseException("You need to install ProtocolLib to use private item drops!");
             } else {
-                hider = new EntityHider(BetonQuest.getInstance(), EntityHider.Policy.BLACKLIST);
+                hider = new EntityHider(BetonQuest.getInstance(), EntityHider.Policy.WHITELIST);
             }
         }
     }
@@ -63,24 +74,17 @@ public class DropItemEvent extends QuestEvent implements Listener {
     @Override
     protected Void execute(final String playerID) throws QuestRuntimeException {
         for (final Instruction.Item item : questItems) {
+            final Player player = PlayerConverter.getPlayer(playerID);
             final QuestItem questItem = item.getItem();
             final VariableNumber amount = item.getAmount();
 
             final ItemStack generateItem = questItem.generate(amount.getInt(playerID), playerID);
-            final Player player = PlayerConverter.getPlayer(playerID);
             final Location loc = location.getLocation(playerID);
             final Entity droppedItem = loc.getWorld().dropItem(loc, generateItem);
 
             if (isPrivate) {
                 entityPlayerMap.put(droppedItem, player.getUniqueId());
-                for (final Player onlinePlayer : Bukkit.getOnlinePlayers()) {
-                    if (!onlinePlayer.equals(player)) {
-                        hider.hideEntity(onlinePlayer, droppedItem);
-                    }
-                }
-            }
-            if (isIndestructible) {
-                indestructibleItem.add(droppedItem);
+                hider.showEntity(player, droppedItem);
             }
         }
         return null;
@@ -89,16 +93,21 @@ public class DropItemEvent extends QuestEvent implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onPickupItem(final EntityPickupItemEvent event) {
-        for (final Entity item : entityPlayerMap.keySet()) {
-            if (event.getItem().equals(item)) {
-                if (event.getEntity().getUniqueId().equals(entityPlayerMap.get(item))) {
-                    entityPlayerMap.remove(item);
-                } else {
-                    event.setCancelled(true);
-                }
-            }
+        final Entity item = event.getItem();
+        if (!entityPlayerMap.containsKey(item)) {
+            return;
         }
-        indestructibleItem.removeIf(item -> event.getItem().equals(item));
+
+        final UUID ownerUUID = entityPlayerMap.get(item);
+        final Entity pickupEntity = event.getEntity();
+        if ((pickupEntity instanceof Player)) {
+            final Player pickupPlayer = (Player) pickupEntity;
+            if (pickupPlayer.getUniqueId().equals(ownerUUID)) {
+                entityPlayerMap.remove(item);
+                return;
+            }
+            event.setCancelled(true);
+        }
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -112,37 +121,39 @@ public class DropItemEvent extends QuestEvent implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onMergingItem(final ItemMergeEvent event) {
-        for (final Entity item : entityPlayerMap.keySet()) {
-            if (event.getEntity().equals(item)) {
-                event.setCancelled(true);
+        //TODO: Define default behavior: Shouldn't private items always be protected from being converted into public
+        //      items by being merged with another players private items?
+        if (isProtected) {
+            for (final Entity item : entityPlayerMap.keySet()) {
+                if (event.getEntity().equals(item)) {
+                    event.setCancelled(true);
+                }
             }
-        }
-        for (final Entity item : indestructibleItem) {
-            if (event.getEntity().equals(item)) {
-                event.setCancelled(true);
-            }
+
         }
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onItemDespawn(final ItemDespawnEvent event) {
-        for (final Entity item : indestructibleItem) {
-            if (event.getEntity().equals(item) && event.getEntity().getType() == EntityType.DROPPED_ITEM) {
-                event.setCancelled(true);
+        if (isProtected) {
+            for (final Entity item : entityPlayerMap.keySet()) {
+                if (event.getEntity().equals(item) && event.getEntity().getType() == EntityType.DROPPED_ITEM) {
+                    event.setCancelled(true);
+                    //TODO: What happens to the items live time? It might have to be reset so this event doesn't fire
+                    //      every tick from now on.
+                }
             }
-        }
-        for (final Entity item : entityPlayerMap.keySet()) {
-            if (event.getEntity().equals(item)) {
-                entityPlayerMap.remove(item);
+        } else {
+            for (final Entity item : entityPlayerMap.keySet()) {
+                if (event.getEntity().equals(item)) {
+                    entityPlayerMap.remove(item);
+                }
             }
         }
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onItemDamage(final EntityDamageEvent event) {
-        indestructibleItem.removeIf(item -> event.getEntity() == item
-                && event.getEntityType() == EntityType.DROPPED_ITEM);
-
         for (final Entity item : entityPlayerMap.keySet()) {
             if (event.getEntity().getType() == EntityType.DROPPED_ITEM
                     && event.getEntity().equals(item)) {
@@ -150,4 +161,8 @@ public class DropItemEvent extends QuestEvent implements Listener {
             }
         }
     }
+
+    //TODO: What happens when the item get's sucked into a hopper?
+
+    //TODO: What happens when the item get's moved (by liquids)?
 }
